@@ -1,0 +1,37 @@
+{
+  "formId": "TEST_FORM",
+  "info": { "title": "経費申請フォーム(テスト)" },
+  "responderUri": "https://docs.google.com/forms/d/e/1FAIpQLTEST/viewform",
+  "revisionId": "00000001",
+  "items": [
+    { "title": "口座登録", "questionItem": { "question": { "questionId": "1a2b3c4d", "required": true, "choiceQuestion": { "type": "RADIO", "options": [
+      { "value": "登録済み", "goToSectionId": "s_budget" }, { "value": "未登録", "goToAction": "NEXT_SECTION" } ] } } } },
+    { "itemId": "s_account", "title": "振込口座登録", "pageBreakItem": {} },
+    { "title": "銀行名", "questionItem": { "question": { "questionId": "00000010", "required": true, "textQuestion": {} } } },
+    { "itemId": "s_budget", "title": "予算選択", "pageBreakItem": {} },
+    { "title": "予算選択", "questionItem": { "question": { "questionId": "00000020", "required": true, "choiceQuestion": { "type": "RADIO", "options": [
+      { "value": "ハウス予算", "goToSectionId": "s_house" }, { "value": "クラブ予算", "goToSectionId": "s_club" } ] } } } },
+    { "itemId": "s_house", "title": "ハウス選択", "pageBreakItem": {} },
+    { "title": "ハウス名", "questionItem": { "question": { "questionId": "00000030", "required": true, "choiceQuestion": { "type": "RADIO", "options": [{ "value": "ハウスA" }, { "value": "ハウスB" }] } } } },
+    { "itemId": "s_house_item", "title": "ハウス予算項目選択", "pageBreakItem": {} },
+    { "title": "ハウス予算項目", "questionItem": { "question": { "questionId": "00000040", "required": true, "choiceQuestion": { "type": "RADIO", "options": [{ "value": "イベント①" }] } } } },
+    { "itemId": "s_club", "title": "クラブ選択", "pageBreakItem": {} },
+    { "title": "クラブ名", "questionItem": { "question": { "questionId": "00000050", "required": true, "choiceQuestion": { "type": "RADIO", "options": [
+      { "value": "茶道部", "goToSectionId": "s_club_sado" } ] } } } },
+    { "itemId": "s_club_sado", "title": "茶道部予算項目", "pageBreakItem": {} },
+    { "title": "茶道部予算項目", "questionItem": { "question": { "questionId": "00000060", "required": true, "choiceQuestion": { "type": "RADIO", "options": [{ "value": "茶道部" }] } } } },
+    { "itemId": "s_orphan", "title": "旧クラブ予算項目", "pageBreakItem": {} },
+    { "title": "旧クラブ予算項目", "questionItem": { "question": { "questionId": "00000070", "required": true, "choiceQuestion": { "type": "RADIO", "options": [{ "value": "旧" }] } } } },
+    { "itemId": "s_detail", "title": "費用詳細入力", "pageBreakItem": {} },
+    { "title": "購入日付", "questionItem": { "question": { "questionId": "00000080", "required": true, "dateQuestion": { "includeYear": true } } } },
+    { "title": "勘定科目", "questionItem": { "question": { "questionId": "00000090", "required": true, "choiceQuestion": { "type": "RADIO", "options": [
+      { "value": "交通費" }, { "value": "食費" }, { "isOther": true } ] } } } },
+    { "title": "用途", "questionItem": { "question": { "questionId": "000000a0", "required": false, "choiceQuestion": { "type": "CHECKBOX", "options": [{ "value": "研究" }, { "value": "イベント" }] } } } },
+    { "title": "金額", "questionItem": { "question": { "questionId": "000000b0", "required": true, "textQuestion": {} } } },
+    { "title": "レシート写真の必要性", "questionItem": { "question": { "questionId": "000000c0", "required": true, "choiceQuestion": { "type": "RADIO", "options": [
+      { "value": "不要", "goToAction": "SUBMIT_FORM" }, { "value": "必要", "goToSectionId": "s_upload" } ] } } } },
+    { "itemId": "s_upload", "title": "アップロード", "pageBreakItem": {} },
+    { "title": "レシート", "questionItem": { "question": { "questionId": "000000d0", "required": true, "fileUploadQuestion": { "maxFiles": 1 } } } },
+    { "title": "インボイス番号", "questionItem": { "question": { "questionId": "000000e0", "required": true, "choiceQuestion": { "type": "RADIO", "options": [{ "value": "あり" }, { "value": "なし" }] } } } }
+  ]
+}
