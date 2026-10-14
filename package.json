@@ -1,25 +1,12 @@
 {
   "name": "fast-receipt",
-  "version": "1.0.0",
-  "description": "経費申請 Google フォームを高速入力する MCP サーバー",
-  "scripts": {
-    "start": "node src/stdio.ts",
-    "start:http": "node src/http.ts",
-    "sync-schema": "node scripts/sync-schema.ts",
-    "test": "node --test \"test/**/*.test.ts\"",
-    "typecheck": "tsc"
-  },
-  "type": "module",
-  "dependencies": {
-    "@modelcontextprotocol/sdk": "^1.32.1",
-    "zod": "^4.6.7"
-  },
-  "devDependencies": {
-    "@types/node": "^26.6.5",
-    "typescript": "^7.0.2"
-  },
   "private": true,
+  "type": "module",
+  "scripts": {
+    "dump-form": "node scripts/dump-form.ts",
+    "test": "node --test"
+  },
   "engines": {
-    "node": ">=22.18"
+    "node": ">=24"
   }
 }
