@@ -141,30 +141,13 @@ function syncChoices(form, ss) {
 // 予算名・予算項目を新旧の回答で同じ形に揃える列をプロセスチェックシートに足し、予算タブの集計式をそこへ向ける。
 function migrateSheet(ss) {
   if (ss.getId() === PROD_SHEET_ID) throw new Error('本番シートはまだ移行しない');
-  const resp = ss.getSheetByName(RESP_TAB);
   const pc = ss.getSheetByName(PC_TAB);
-  const head = resp.getRange(1, 1, 1, resp.getLastColumn()).getValues()[0].map(s => String(s).trim());
-  const col = t => { const i = head.indexOf(t); if (i < 0) throw new Error('回答列が無い: ' + t); return i + 1; };
-  const [kind, house, houseItem, iin, club, mypro] = ['予算選択', 'ハウス名', 'ハウス予算項目', '委員会名選択', 'クラブ名選択', 'マイプロジェクト選択'].map(col);
-
   const nameCol = pc.getLastColumn() + 1;
   const itemCol = nameCol + 1;
   if (pc.getMaxColumns() < itemCol) pc.insertColumnsAfter(pc.getMaxColumns(), itemCol - pc.getMaxColumns());
   if (pc.getMaxRows() < 4601) pc.insertRowsAfter(pc.getMaxRows(), 4601 - pc.getMaxRows());
   if (pc.getRange(3, nameCol).getValue() !== '') throw new Error('集計用の列が空いていない');
-  const last = resp.getRange(1, resp.getLastColumn()).getA1Notation().replace(/\d+/, '');
-  // プロセスチェックシートの 4 行目 = 回答の 3 行目(A4 の IMPORTRANGE と同じずれ)
-  const R = `'${RESP_TAB}'!A3:${last}4600`;
-  const s = `INDEX(r,1,${iin})&INDEX(r,1,${club})&INDEX(r,1,${mypro})`;
-  pc.getRange(3, nameCol, 1, 2).setValues([['予算名(集計用)', '予算項目(集計用)']]);
-  pc.getRange(4, nameCol).setFormula(
-    `=BYROW(${R},LAMBDA(r,LET(k,INDEX(r,1,${kind}),s,${s},IF(k="","",IF(k="ハウス予算",INDEX(r,1,${house}),IFERROR(REGEXEXTRACT(s,"^[^${SEP}]*"),""))))))`);
-  // 旧回答の予算項目は、予算ごとの項目列のどれか 1 つに入っている
-  pc.getRange(4, itemCol).setFormula(
-    `=BYROW(${R},LAMBDA(r,LET(k,INDEX(r,1,${kind}),s,${s},c,SEQUENCE(1,COLUMNS(r)),IF(k="","",IF(k="ハウス予算",INDEX(r,1,${houseItem}),` +
-    `IF(REGEXMATCH(s,"${SEP}"),REGEXEXTRACT(s,"${SEP}(.*)$"),IFERROR(TEXTJOIN("",TRUE,FILTER(r,(c>${iin})*(c<>${club})*(c<>${mypro}))),"")))))))`);
-
-  const nameCols = [house, iin, club, mypro];
+  const nameCols = unfiltered(pc, () => writeAggFormulas(ss, nameCol));
   const skipped = [];
   let changed = 0;
   for (const sh of budgetTabs(ss)) {
@@ -176,6 +159,30 @@ function migrateSheet(ss) {
     }));
   }
   return { nameCol, itemCol, changed, skipped };
+}
+
+// 集計用 2 列(nameCol, nameCol+1)の式。新旧の回答を同じ予算名・項目に揃える。返り値は旧回答の予算名列
+function writeAggFormulas(ss, nameCol) {
+  if (ss.getId() === PROD_SHEET_ID) throw new Error('本番シートはまだ移行しない');
+  const resp = ss.getSheetByName(RESP_TAB);
+  const pc = ss.getSheetByName(PC_TAB);
+  const head = resp.getRange(1, 1, 1, resp.getLastColumn()).getValues()[0].map(s => String(s).trim());
+  const col = t => { const i = head.indexOf(t); if (i < 0) throw new Error('回答列が無い: ' + t); return i + 1; };
+  const [kind, house, houseItem, iin, club, mypro] = ['予算選択', 'ハウス名', 'ハウス予算項目', '委員会名選択', 'クラブ名選択', 'マイプロジェクト選択'].map(col);
+
+  const itemCol = nameCol + 1;
+  const last = resp.getRange(1, resp.getLastColumn()).getA1Notation().replace(/\d+/, '');
+  // プロセスチェックシートの 4 行目 = 回答の 3 行目(A4 の IMPORTRANGE と同じずれ)
+  const R = `'${RESP_TAB}'!A3:${last}4600`;
+  const s = `INDEX(r,1,${iin})&INDEX(r,1,${club})&INDEX(r,1,${mypro})`;
+  pc.getRange(3, nameCol, 1, 2).setValues([['予算名(集計用)', '予算項目(集計用)']]);
+  pc.getRange(4, nameCol).setFormula(
+    `=BYROW(${R},LAMBDA(r,LET(k,INDEX(r,1,${kind}),s,${s},IF(k="","",IF(k="ハウス予算",INDEX(r,1,${house}),IFERROR(REGEXEXTRACT(s,"^[^${SEP}]*"),""))))))`);
+  // 旧回答の予算項目は、予算ごとの項目列のどれか 1 つに入っている
+  pc.getRange(4, itemCol).setFormula(
+    `=BYROW(${R},LAMBDA(r,LET(k,INDEX(r,1,${kind}),s,${s},c,SEQUENCE(1,COLUMNS(r)),IF(k="","",IF(k="ハウス予算",INDEX(r,1,${houseItem}),` +
+    `IF(REGEXMATCH(s,"${SEP}"),REGEXEXTRACT(s,"${SEP}(.*)$"),IFERROR(TEXTJOIN("",TRUE,FILTER(r,(c>${iin})*(c<>${club})*(c<>${mypro}))),"")))))))`);
+  return [house, iin, club, mypro];
 }
 
 function budgetTabs(ss) {
@@ -248,8 +255,21 @@ function toMarkdown(form) {
   return lines.join('\n') + '\n';
 }
 
+const STEPS = { inspectCopy, fixCopy, stripUploadCopy, step1_createTestForm, step2_migrateCopy, step3_submitTests, step4_verifyTests, info, sync, publishTestForm, cleanup };
+
 function doGet(e) {
+  // 管理用: エディタの代わりに /dev?admin=<config.js の ADMIN_TOKEN>&run=<関数名> で手順を実行してログを返す
+  if (e.parameter.run) {
+    if (typeof ADMIN_TOKEN === 'undefined' || e.parameter.admin !== ADMIN_TOKEN || !STEPS[e.parameter.run]) return ContentService.createTextOutput('forbidden');
+    try { STEPS[e.parameter.run](); } catch (err) { log('ERROR: ' + err.stack); }
+    props().setProperty('LAST_LOG', `${new Date().toISOString()} ${e.parameter.run}\n` + OUT.join('\n').slice(0, 8000));
+    return ContentService.createTextOutput(OUT.join('\n') || '(no output)');
+  }
   const p = PropertiesService.getScriptProperties().getProperties();
+  if (e.parameter.lastlog && typeof ADMIN_TOKEN !== 'undefined' && e.parameter.admin === ADMIN_TOKEN) {
+    const { TOKEN, LAST_LOG, ...rest } = p; // 状態確認用(TOKEN は返さない)
+    return ContentService.createTextOutput(JSON.stringify(rest) + '\n' + (LAST_LOG || ''));
+  }
   if (!p.TOKEN || e.parameter.token !== p.TOKEN) return ContentService.createTextOutput('forbidden');
   const cache = CacheService.getScriptCache();
   let md = cache.get('manifest');
@@ -258,6 +278,9 @@ function doGet(e) {
 }
 
 // ---------- エディタから実行する手順 ----------
+
+const OUT = [];
+function log(s) { OUT.push(String(s)); console.log(s); } // doGet(run) にも返す
 
 function props() { return PropertiesService.getScriptProperties(); }
 
@@ -272,12 +295,14 @@ function step1_createTestForm() {
   const file = DriveApp.getFileById(PROD_FORM_ID).makeCopy('[TEST] 経費申請フォーム(新構成)');
   const form = FormApp.openById(file.getId());
   try { form.removeDestination(); } catch (_) { /* 回答先なし */ }
+  form.setPublished(true); // コピーは未公開・受付停止で作られる
+  form.setAcceptingResponses(true);
   const deleted = migrateForm(form);
   const choiceChanges = syncChoices(form, SpreadsheetApp.openById(PROD_SHEET_ID));
   const p = props();
   if (!p.getProperty('TOKEN')) p.setProperty('TOKEN', Utilities.getUuid());
   p.setProperties({ FORM_ID: form.getId(), SHEET_ID: PROD_SHEET_ID, TEST_FORM_ID: form.getId() });
-  console.log(JSON.stringify({ edit: form.getEditUrl(), view: form.getPublishedUrl(), deleted: deleted.length, choiceChanges }, null, 1));
+  log(JSON.stringify({ edit: form.getEditUrl(), view: form.getPublishedUrl(), deleted: deleted.length, choiceChanges }, null, 1));
 }
 
 // 手順2: 本番シートのコピー(リンクされたフォームも複製される)で移行し、既存の集計値が変わらないことを確かめる。
@@ -291,15 +316,9 @@ function step2_migrateCopy() {
   // シートの複製で、リンクされた他のフォーム(2022年下期)も複製される。後で消すために控える
   const others = copy.getSheets().map(s => s.getFormUrl()).filter(u => u && u !== url).map(u => FormApp.openByUrl(u).getId());
   props().setProperties({ COPY_SHEET_ID: copy.getId(), COPY_FORM_ID: form.getId(), COPY_OTHER_FORMS: others.join(',') });
+  form.setPublished(true);
   form.setAcceptingResponses(true);
-  // コピーの IMPORTRANGE は本番シートを読むので、同じ範囲の直接参照に置き換える
-  const pc = copy.getSheetByName(PC_TAB);
-  for (const a1 of ['A3', 'A4']) {
-    const r = pc.getRange(a1);
-    const m = r.getFormula().match(/IMPORTRANGE\("[^"]*","([^"]+)"\)/);
-    if (!m) throw new Error(`${PC_TAB}!${a1} が想定外: ${r.getFormula()}`);
-    r.setFormula(`=ARRAYFORMULA('${RESP_TAB}'!${m[1].split('!')[1]})`);
-  }
+  unfiltered(copy.getSheetByName(PC_TAB), () => localizeImports(copy));
 
   const before = snapshot(copy);
   const deleted = migrateForm(form);
@@ -307,7 +326,7 @@ function step2_migrateCopy() {
   syncChoices(form, copy);
   const after = snapshot(copy);
   const changes = diff(before, after);
-  console.log(JSON.stringify({ sheet: copy.getUrl(), form: form.getEditUrl(), deleted: deleted.length, ...sheet, changedValues: changes.length, changes: changes.slice(0, 50) }, null, 1));
+  log(JSON.stringify({ sheet: copy.getUrl(), form: form.getEditUrl(), deleted: deleted.length, ...sheet, changedValues: changes.length, changes: changes.slice(0, 50) }, null, 1));
 }
 
 // 手順3: 移行したコピーのフォームへ区分ごとに 1 件ずつテスト回答し、集計に乗るかを見る(結果は step4)。
@@ -330,21 +349,20 @@ function step3_submitTests() {
     const name = first(k.name);
     const [budget, item] = k.item ? [name, first(k.item)] : name.split(SEP);
     const amount = 90001 + n;
-    const r = form.createResponse()
-      .withItemResponse(answer('返金銀行口座登録', choiceItem(findItem(form, '返金銀行口座登録')).getChoices()[0].getValue()))
-      .withItemResponse(answer('予算選択', kind))
-      .withItemResponse(answer(k.name, name));
-    if (k.item) r.withItemResponse(answer(k.item, item));
-    r.withItemResponse(answer('氏名(苗字+名前)', 'テスト')).withItemResponse(answer('購入日付', new Date()))
-      .withItemResponse(answer('勘定科目', first('勘定科目'))).withItemResponse(answer('消費税率', first('消費税率')))
-      .withItemResponse(answer('購入先', 'テスト')).withItemResponse(answer('購入物品名', 'テスト'))
-      .withItemResponse(answer('購入目的', 'テスト')).withItemResponse(answer('経費精算金額(数字のみ入力)(一部金額の精算はできません！！)', amount))
-      .withItemResponse(answer('レシート写真の必要性', noReceipt))
-      .submit();
-    tests.push({ kind, budget, item, amount, before: appliedAmount(ss, kind, budget, item) });
+    const before = appliedAmount(ss, kind, budget, item); // 送信前に取る
+    const r = form.createResponse();
+    const qa = [['返金銀行口座登録', first('返金銀行口座登録')], ['予算選択', kind], [k.name, name], ...(k.item ? [[k.item, item]] : []),
+      ['氏名(苗字+名前)', 'テスト'], ['購入日付', new Date()], ['勘定科目', first('勘定科目')], ['消費税率', first('消費税率')],
+      ['購入先', 'テスト'], ['購入物品名', 'テスト'], ['購入目的', 'テスト'],
+      ['経費精算金額(数字のみ入力)(一部金額の精算はできません！！)', amount], ['レシート写真の必要性', noReceipt]];
+    // どの回答が弾かれたか分かるように 1 つずつ足す
+    for (const [t, v] of qa) { try { r.withItemResponse(answer(t, v)); } catch (e) { throw new Error(`${kind} / ${t}: ${e.message}`); } }
+    let submitted = true;
+    try { r.submit(); } catch (e) { submitted = e.message; }
+    tests.push({ kind, budget, item, amount, before, submitted });
   });
   props().setProperty('TESTS', JSON.stringify(tests));
-  console.log(JSON.stringify(tests, null, 1));
+  log(JSON.stringify(tests, null, 1));
 }
 
 function step4_verifyTests() {
@@ -355,7 +373,7 @@ function step4_verifyTests() {
     const after = appliedAmount(ss, t.kind, t.budget, t.item);
     return { ...t, after, ok: after - t.before === t.amount };
   });
-  console.log(JSON.stringify(res, null, 1));
+  log(JSON.stringify(res, null, 1));
 }
 
 // 予算タブで予算名・項目が一致する行の「経費申請額」(行内で最初の集計式のセル)
@@ -378,4 +396,84 @@ function cleanup() {
   const p = props().getProperties();
   const ids = [p.TEST_FORM_ID, p.COPY_FORM_ID, p.COPY_SHEET_ID, ...(p.COPY_OTHER_FORMS || '').split(',')].filter(Boolean);
   for (const id of ids) DriveApp.getFileById(id).setTrashed(true);
+}
+
+// Skill に渡す URL と、いま返す manifest をログに出す
+function info() {
+  const p = props().getProperties();
+  log(`manifest URL: ${ScriptApp.getService().getUrl()}?token=${p.TOKEN}`);
+  log(toMarkdown(FormApp.openById(p.FORM_ID)));
+}
+
+function publishTestForm() { const f = FormApp.openById(props().getProperty('TEST_FORM_ID')); f.setPublished(true); f.setAcceptingResponses(true); log(`${f.isPublished()} ${f.isAcceptingResponses()}`); }
+
+// step2 の到達点を読むだけ(個人情報は出さない: 式・件数・集計タブの差分のみ)。本番シートも読むだけ
+function inspectCopy() {
+  const p = props().getProperties();
+  const ss = SpreadsheetApp.openById(p.COPY_SHEET_ID);
+  const pc = ss.getSheetByName(PC_TAB);
+  const lc = pc.getLastColumn();
+  const f = pc.getRange(3, 100, 2, lc - 99).getFormulas();
+  const filled = pc.getRange(4, lc - 1, 4597, 2).getValues().filter(r => r[0] !== '' || r[1] !== '').length;
+  const a = snapshot(ss), b = snapshot(SpreadsheetApp.openById(PROD_SHEET_ID));
+  const d = diff(b, a);
+  const unchanged = budgetTabs(ss).map(sh => {
+    const fs = sh.getDataRange().getFormulasR1C1();
+    const out = [];
+    fs.forEach((r, i) => r.forEach((x, j) => { if (x.includes(PC_TAB) && !x.includes(`C${lc - 1}:C${lc - 1}`)) out.push(sh.getRange(i + 1, j + 1).getA1Notation() + ' ' + x.slice(0, 140)); }));
+    return [sh.getName(), out];
+  });
+  log(JSON.stringify({
+    maxCols: pc.getMaxColumns(), maxRows: pc.getMaxRows(), lastCol: lc, filledRows: filled,
+    a4: pc.getRange('A4').getFormula().slice(0, 80),
+    row3to4_from_col100: f.map(r => r.map((x, j) => x && `${100 + j}:${x.slice(0, 60)}`).filter(Boolean)),
+    diffVsProd: d.length, diffs: d.slice(0, 30), notRewritten: unchanged,
+  }, null, 1));
+}
+
+// コピーの IMPORTRANGE は本番シートを読むので、同じ範囲の直接参照に置き換える(置き換え済みは飛ばす)
+function localizeImports(copy) {
+  if (copy.getId() === PROD_SHEET_ID) throw new Error('本番シートは触らない');
+  const pc = copy.getSheetByName(PC_TAB);
+  for (const a1 of ['A3', 'A4']) {
+    const r = pc.getRange(a1);
+    if (r.getFormula().startsWith(`=ARRAYFORMULA('${RESP_TAB}'!`)) continue;
+    const m = r.getFormula().match(/IMPORTRANGE\("[^"]*","([^"]+)"\)/);
+    if (!m) throw new Error(`${PC_TAB}!${a1} が想定外: ${r.getFormula()}`);
+    r.setFormula(`=ARRAYFORMULA('${RESP_TAB}'!${m[1].split('!')[1]})`);
+  }
+}
+
+// step2 で残らなかった A4 と集計用の式を、コピーにだけ入れ直して確認する
+function fixCopy() {
+  const ss = SpreadsheetApp.openById(props().getProperty('COPY_SHEET_ID'));
+  const pc = ss.getSheetByName(PC_TAB);
+  const nameCol = pc.getLastColumn() - 1;
+  if (pc.getRange(3, nameCol).getValue() !== '予算名(集計用)') throw new Error('集計用の列が無い');
+  unfiltered(pc, () => { localizeImports(ss); writeAggFormulas(ss, nameCol); });
+  inspectCopy();
+}
+
+// フィルタで隠れた行への setFormula はエラーなしで無視される(値は入る)。条件を一時的に外して書き、元に戻す
+function unfiltered(sh, fn) {
+  const fl = sh.getFilter();
+  if (!fl) return fn();
+  const r = fl.getRange(), saved = [];
+  for (let c = r.getColumn(); c <= r.getLastColumn(); c++) {
+    const cr = fl.getColumnFilterCriteria(c);
+    if (cr) { saved.push([c, cr]); fl.removeColumnFilterCriteria(c); }
+  }
+  try { return fn(); } finally { saved.forEach(([c, cr]) => fl.setColumnFilterCriteria(c, cr)); }
+}
+
+// コピーのフォームは共有ドライブにでき、共有ドライブではファイルアップロード質問付きのフォームが回答を受け付けない
+// (submit() も Invalid data updating form)。移動は権限で拒否されたので、コピーからだけアップロード質問を外す
+function stripUploadCopy() {
+  const id = props().getProperty('COPY_FORM_ID');
+  if (id === PROD_FORM_ID) throw new Error('本番');
+  const form = FormApp.openById(id);
+  const up = form.getItems(FormApp.ItemType.FILE_UPLOAD);
+  up.forEach(it => form.deleteItem(it));
+  form.setAcceptingResponses(true);
+  log(`deleted upload items: ${up.length}, accepting=${form.isAcceptingResponses()}`);
 }
