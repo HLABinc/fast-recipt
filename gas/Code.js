@@ -58,7 +58,7 @@ function choiceItem(it) {
 
 // 旧構成(予算ごとのセクション約70個)を、区分ごとに 1 セクションの構成に作り替える。
 function migrateForm(form) {
-  if (form.getId() === PROD_FORM_ID) throw new Error('本番フォームはまだ移行しない');
+  guardProd(form.getId());
   const T = FormApp.ItemType;
   const pages = {};
   const del = [];
@@ -140,7 +140,7 @@ function syncChoices(form, ss) {
 
 // 予算名・予算項目を新旧の回答で同じ形に揃える列をプロセスチェックシートに足し、予算タブの集計式をそこへ向ける。
 function migrateSheet(ss) {
-  if (ss.getId() === PROD_SHEET_ID) throw new Error('本番シートはまだ移行しない');
+  guardProd(ss.getId());
   const pc = ss.getSheetByName(PC_TAB);
   const nameCol = pc.getLastColumn() + 1;
   const itemCol = nameCol + 1;
@@ -163,7 +163,7 @@ function migrateSheet(ss) {
 
 // 集計用 2 列(nameCol, nameCol+1)の式。新旧の回答を同じ予算名・項目に揃える。返り値は旧回答の予算名列
 function writeAggFormulas(ss, nameCol) {
-  if (ss.getId() === PROD_SHEET_ID) throw new Error('本番シートはまだ移行しない');
+  guardProd(ss.getId());
   const resp = ss.getSheetByName(RESP_TAB);
   const pc = ss.getSheetByName(PC_TAB);
   const head = resp.getRange(1, 1, 1, resp.getLastColumn()).getValues()[0].map(s => String(s).trim());
@@ -255,21 +255,8 @@ function toMarkdown(form) {
   return lines.join('\n') + '\n';
 }
 
-const STEPS = { inspectCopy, fixCopy, stripUploadCopy, step1_createTestForm, step2_migrateCopy, step3_submitTests, step4_verifyTests, info, sync, publishTestForm, cleanup };
-
 function doGet(e) {
-  // 管理用: エディタの代わりに /dev?admin=<config.js の ADMIN_TOKEN>&run=<関数名> で手順を実行してログを返す
-  if (e.parameter.run) {
-    if (typeof ADMIN_TOKEN === 'undefined' || e.parameter.admin !== ADMIN_TOKEN || !STEPS[e.parameter.run]) return ContentService.createTextOutput('forbidden');
-    try { STEPS[e.parameter.run](); } catch (err) { log('ERROR: ' + err.stack); }
-    props().setProperty('LAST_LOG', `${new Date().toISOString()} ${e.parameter.run}\n` + OUT.join('\n').slice(0, 8000));
-    return ContentService.createTextOutput(OUT.join('\n') || '(no output)');
-  }
   const p = PropertiesService.getScriptProperties().getProperties();
-  if (e.parameter.lastlog && typeof ADMIN_TOKEN !== 'undefined' && e.parameter.admin === ADMIN_TOKEN) {
-    const { TOKEN, LAST_LOG, ...rest } = p; // 状態確認用(TOKEN は返さない)
-    return ContentService.createTextOutput(JSON.stringify(rest) + '\n' + (LAST_LOG || ''));
-  }
   if (!p.TOKEN || e.parameter.token !== p.TOKEN) return ContentService.createTextOutput('forbidden');
   const cache = CacheService.getScriptCache();
   let md = cache.get('manifest');
@@ -279,8 +266,7 @@ function doGet(e) {
 
 // ---------- エディタから実行する手順 ----------
 
-const OUT = [];
-function log(s) { OUT.push(String(s)); console.log(s); } // doGet(run) にも返す
+function log(s) { console.log(s); }
 
 function props() { return PropertiesService.getScriptProperties(); }
 
@@ -292,7 +278,7 @@ function sync() {
 
 // 手順1: 本番フォームのコピーを新構成にし、選択肢を本番の予算タブから入れる(本番は読むだけ)。回答先は無し。
 function step1_createTestForm() {
-  const file = DriveApp.getFileById(PROD_FORM_ID).makeCopy('[TEST] 経費申請フォーム(新構成)');
+  const file = DriveApp.getFileById(PROD_FORM_ID).makeCopy('[TEST] 経費申請フォーム(新構成)', DriveApp.getRootFolder());
   const form = FormApp.openById(file.getId());
   try { form.removeDestination(); } catch (_) { /* 回答先なし */ }
   form.setPublished(true); // コピーは未公開・受付停止で作られる
@@ -305,9 +291,40 @@ function step1_createTestForm() {
   log(JSON.stringify({ edit: form.getEditUrl(), view: form.getPublishedUrl(), deleted: deleted.length, choiceChanges }, null, 1));
 }
 
+// 移行の本体(step2 のコピーと本番で共通)。既存の集計値と承認・払い戻しの行が変わらないことも返す
+function migrate(form, ss) {
+  const before = snapshot(ss), align = alignState(ss);
+  const deleted = migrateForm(form);
+  const sheet = migrateSheet(ss);
+  syncChoices(form, ss);
+  const changes = diff(before, snapshot(ss));
+  const now = alignState(ss);
+  const alignMoved = align.filter((r, i) => JSON.stringify(r) !== JSON.stringify(now[i])).length;
+  return { deleted: deleted.length, ...sheet, changedValues: changes.length, changes: changes.slice(0, 50), alignMoved };
+}
+
+// 本番移行(docs/migration.md)。スクリプトプロパティ ALLOW_PROD=yes のときだけ動き、終わったら消す
+function migrateProduction() {
+  const form = FormApp.openById(PROD_FORM_ID);
+  form.setAcceptingResponses(false); // 途中の構成で回答が来ないように
+  try {
+    const res = migrate(form, SpreadsheetApp.openById(PROD_SHEET_ID));
+    props().setProperties({ FORM_ID: PROD_FORM_ID, SHEET_ID: PROD_SHEET_ID });
+    CacheService.getScriptCache().remove('manifest');
+    log(JSON.stringify(res, null, 1));
+  } finally {
+    props().deleteProperty('ALLOW_PROD');
+    form.setAcceptingResponses(true);
+  }
+}
+
+function guardProd(id) {
+  if ((id === PROD_FORM_ID || id === PROD_SHEET_ID) && props().getProperty('ALLOW_PROD') !== 'yes') throw new Error('本番は ALLOW_PROD=yes のときだけ移行する');
+}
+
 // 手順2: 本番シートのコピー(リンクされたフォームも複製される)で移行し、既存の集計値が変わらないことを確かめる。
 function step2_migrateCopy() {
-  const copy = SpreadsheetApp.openById(DriveApp.getFileById(PROD_SHEET_ID).makeCopy('[TEST] 予実管理シート(移行検証)').getId());
+  const copy = SpreadsheetApp.openById(DriveApp.getFileById(PROD_SHEET_ID).makeCopy('[TEST] 予実管理シート(移行検証)', DriveApp.getRootFolder()).getId());
   const url = copy.getSheetByName(RESP_TAB).getFormUrl();
   if (!url || url.includes(PROD_FORM_ID)) throw new Error('コピーにフォームの複製が付いていない: ' + url);
   const form = FormApp.openByUrl(url);
@@ -317,19 +334,13 @@ function step2_migrateCopy() {
   const others = copy.getSheets().map(s => s.getFormUrl()).filter(u => u && u !== url).map(u => FormApp.openByUrl(u).getId());
   props().setProperties({ COPY_SHEET_ID: copy.getId(), COPY_FORM_ID: form.getId(), COPY_OTHER_FORMS: others.join(',') });
   form.setPublished(true);
-  form.setAcceptingResponses(true);
+  stripUpload(form); // 共有ドライブにできたコピーは、アップロード質問があると回答を受け付けない
   unfiltered(copy.getSheetByName(PC_TAB), () => localizeImports(copy));
 
-  const before = snapshot(copy);
-  const deleted = migrateForm(form);
-  const sheet = migrateSheet(copy);
-  syncChoices(form, copy);
-  const after = snapshot(copy);
-  const changes = diff(before, after);
-  log(JSON.stringify({ sheet: copy.getUrl(), form: form.getEditUrl(), deleted: deleted.length, ...sheet, changedValues: changes.length, changes: changes.slice(0, 50) }, null, 1));
+  log(JSON.stringify({ sheet: copy.getUrl(), form: form.getEditUrl(), ...migrate(form, copy) }, null, 1));
 }
 
-// 手順3: 移行したコピーのフォームへ区分ごとに 1 件ずつテスト回答し、集計に乗るかを見る(結果は step4)。
+// 手順3: 区分ごとに 1 件ずつ、送信前の集計額とテスト回答の prefill URL を作る(ブラウザで送信 → step4)。
 function step3_submitTests() {
   const p = props().getProperties();
   const form = FormApp.openById(p.COPY_FORM_ID);
@@ -357,9 +368,8 @@ function step3_submitTests() {
       ['経費精算金額(数字のみ入力)(一部金額の精算はできません！！)', amount], ['レシート写真の必要性', noReceipt]];
     // どの回答が弾かれたか分かるように 1 つずつ足す
     for (const [t, v] of qa) { try { r.withItemResponse(answer(t, v)); } catch (e) { throw new Error(`${kind} / ${t}: ${e.message}`); } }
-    let submitted = true;
-    try { r.submit(); } catch (e) { submitted = e.message; }
-    tests.push({ kind, budget, item, amount, before, submitted });
+    // FormResponse.submit() はシートのコピーに付いたフォームでは失敗する。Skill と同じく prefill URL をブラウザで送信する
+    tests.push({ kind, budget, item, amount, before, url: r.toPrefilledUrl() });
   });
   props().setProperty('TESTS', JSON.stringify(tests));
   log(JSON.stringify(tests, null, 1));
@@ -391,11 +401,21 @@ function appliedAmount(ss, kind, budget, item) {
   throw new Error(`予算タブに行が無い: ${budget} / ${item}`);
 }
 
-// 検証で作ったファイルを削除する
+// 検証で作ったファイルをゴミ箱へ(本番 ID は触らない)。テストで添付した画像と、テストフォームの回答フォルダも
 function cleanup() {
   const p = props().getProperties();
   const ids = [p.TEST_FORM_ID, p.COPY_FORM_ID, p.COPY_SHEET_ID, ...(p.COPY_OTHER_FORMS || '').split(',')].filter(Boolean);
-  for (const id of ids) DriveApp.getFileById(id).setTrashed(true);
+  const files = [], folders = [];
+  for (const it = DriveApp.searchFiles("title = 'test-receipt.png' and 'me' in owners"); it.hasNext();) files.push(it.next());
+  for (const it = DriveApp.searchFolders("title contains '[TEST] 経費申請フォーム' and 'me' in owners"); it.hasNext();) folders.push(it.next());
+  const out = [];
+  for (const id of ids) {
+    if (id === PROD_FORM_ID || id === PROD_SHEET_ID) throw new Error('本番');
+    try { const f = DriveApp.getFileById(id); f.setTrashed(true); out.push(`${f.getName()}: trashed`); } catch (e) { out.push(`${id}: ${e.message}`); }
+  }
+  for (const f of [...files, ...folders]) { try { f.setTrashed(true); out.push(`${f.getName()}: trashed`); } catch (e) { out.push(`${f.getName()}: ${e.message}`); } }
+  props().deleteProperty('TESTS'); props().deleteProperty('TESTS2'); props().deleteProperty('ALIGN_BASE');
+  log(out.join('\n'));
 }
 
 // Skill に渡す URL と、いま返す manifest をログに出す
@@ -403,32 +423,6 @@ function info() {
   const p = props().getProperties();
   log(`manifest URL: ${ScriptApp.getService().getUrl()}?token=${p.TOKEN}`);
   log(toMarkdown(FormApp.openById(p.FORM_ID)));
-}
-
-function publishTestForm() { const f = FormApp.openById(props().getProperty('TEST_FORM_ID')); f.setPublished(true); f.setAcceptingResponses(true); log(`${f.isPublished()} ${f.isAcceptingResponses()}`); }
-
-// step2 の到達点を読むだけ(個人情報は出さない: 式・件数・集計タブの差分のみ)。本番シートも読むだけ
-function inspectCopy() {
-  const p = props().getProperties();
-  const ss = SpreadsheetApp.openById(p.COPY_SHEET_ID);
-  const pc = ss.getSheetByName(PC_TAB);
-  const lc = pc.getLastColumn();
-  const f = pc.getRange(3, 100, 2, lc - 99).getFormulas();
-  const filled = pc.getRange(4, lc - 1, 4597, 2).getValues().filter(r => r[0] !== '' || r[1] !== '').length;
-  const a = snapshot(ss), b = snapshot(SpreadsheetApp.openById(PROD_SHEET_ID));
-  const d = diff(b, a);
-  const unchanged = budgetTabs(ss).map(sh => {
-    const fs = sh.getDataRange().getFormulasR1C1();
-    const out = [];
-    fs.forEach((r, i) => r.forEach((x, j) => { if (x.includes(PC_TAB) && !x.includes(`C${lc - 1}:C${lc - 1}`)) out.push(sh.getRange(i + 1, j + 1).getA1Notation() + ' ' + x.slice(0, 140)); }));
-    return [sh.getName(), out];
-  });
-  log(JSON.stringify({
-    maxCols: pc.getMaxColumns(), maxRows: pc.getMaxRows(), lastCol: lc, filledRows: filled,
-    a4: pc.getRange('A4').getFormula().slice(0, 80),
-    row3to4_from_col100: f.map(r => r.map((x, j) => x && `${100 + j}:${x.slice(0, 60)}`).filter(Boolean)),
-    diffVsProd: d.length, diffs: d.slice(0, 30), notRewritten: unchanged,
-  }, null, 1));
 }
 
 // コピーの IMPORTRANGE は本番シートを読むので、同じ範囲の直接参照に置き換える(置き換え済みは飛ばす)
@@ -444,16 +438,6 @@ function localizeImports(copy) {
   }
 }
 
-// step2 で残らなかった A4 と集計用の式を、コピーにだけ入れ直して確認する
-function fixCopy() {
-  const ss = SpreadsheetApp.openById(props().getProperty('COPY_SHEET_ID'));
-  const pc = ss.getSheetByName(PC_TAB);
-  const nameCol = pc.getLastColumn() - 1;
-  if (pc.getRange(3, nameCol).getValue() !== '予算名(集計用)') throw new Error('集計用の列が無い');
-  unfiltered(pc, () => { localizeImports(ss); writeAggFormulas(ss, nameCol); });
-  inspectCopy();
-}
-
 // フィルタで隠れた行への setFormula はエラーなしで無視される(値は入る)。条件を一時的に外して書き、元に戻す
 function unfiltered(sh, fn) {
   const fl = sh.getFilter();
@@ -466,14 +450,101 @@ function unfiltered(sh, fn) {
   try { return fn(); } finally { saved.forEach(([c, cr]) => fl.setColumnFilterCriteria(c, cr)); }
 }
 
-// コピーのフォームは共有ドライブにでき、共有ドライブではファイルアップロード質問付きのフォームが回答を受け付けない
-// (submit() も Invalid data updating form)。移動は権限で拒否されたので、コピーからだけアップロード質問を外す
-function stripUploadCopy() {
-  const id = props().getProperty('COPY_FORM_ID');
-  if (id === PROD_FORM_ID) throw new Error('本番');
-  const form = FormApp.openById(id);
-  const up = form.getItems(FormApp.ItemType.FILE_UPLOAD);
-  up.forEach(it => form.deleteItem(it));
+// 共有ドライブのフォームはファイルアップロード質問があると回答を受け付けない(submit() も Invalid data updating form)。
+// コピーのフォームからだけ外す。添付の経路はアップロード質問付きのテストフォーム(マイドライブ)で確かめる
+function stripUpload(form) {
+  if (form.getId() === PROD_FORM_ID) throw new Error('本番');
+  form.getItems(FormApp.ItemType.FILE_UPLOAD).forEach(it => form.deleteItem(it));
   form.setAcceptingResponses(true);
-  log(`deleted upload items: ${up.length}, accepting=${form.isAcceptingResponses()}`);
+}
+
+// 手順5: 期の途中の選択肢追加(委員会タブに 1 行足して sync)と、口座未登録の分岐。送信はブラウザで prefill URL から行う。
+function step5_prepare() {
+  const p = props().getProperties();
+  if (p.COPY_SHEET_ID === PROD_SHEET_ID || p.COPY_FORM_ID === PROD_FORM_ID) throw new Error('本番');
+  const form = FormApp.openById(p.COPY_FORM_ID);
+  const ss = SpreadsheetApp.openById(p.COPY_SHEET_ID);
+  const NEW = ['26年度後期テスト追加委員会', '活動支援金'];
+  const sh = budgetTabs(ss).find(s => KINDS['委員会予算'].tab.test(s.getName()));
+  const rg = sh.getRange(1, 1, sh.getLastRow(), sh.getLastColumn());
+  const v = rg.getDisplayValues(), f = rg.getFormulas();
+  if (!v.some(r => r[0] === NEW[0])) {
+    const i = v.findIndex((r, k) => r[0] && r[1] && f[k].some(x => x.includes(PC_TAB))); // 最初の委員会の行
+    sh.insertRowAfter(i + 1);
+    sh.getRange(i + 1, 1, 1, sh.getLastColumn()).copyTo(sh.getRange(i + 2, 1, 1, sh.getLastColumn()));
+    sh.getRange(i + 2, 1, 1, 2).setValues([NEW]);
+  }
+  const changes = syncChoices(form, ss);
+  const label = NEW.join(SEP);
+  const inManifest = toMarkdown(form).includes(label);
+  const first = t => choiceItem(findItem(form, t)).getChoices()[0].getValue();
+  const resp = (t, val) => {
+    const it = findItem(form, t), T = FormApp.ItemType;
+    if (it.getType() === T.TEXT) return it.asTextItem().createResponse(String(val));
+    if (it.getType() === T.DATE) return it.asDateItem().createResponse(val);
+    return choiceItem(it).createResponse(val);
+  };
+  const noReceipt = choiceItem(findItem(form, 'レシート写真の必要性')).getChoices()
+    .find(c => c.getPageNavigationType() === FormApp.PageNavigationType.SUBMIT).getValue();
+  const acct = choiceItem(findItem(form, '返金銀行口座登録')).getChoices().map(c => c.getValue());
+  const cases = [
+    { name: 'midterm', account: acct[0], budget: NEW[0], item: NEW[1], amount: 90005 },
+    { name: 'newAccount', account: acct.find(a => a.includes('ない')), budget: '26年度後期College Incubator Capital', item: '活動支援金', amount: 90006 },
+  ];
+  const tests = cases.map(c => {
+    const qa = [['返金銀行口座登録', c.account], ['予算選択', '委員会予算'], ['委員会名選択', c.budget + SEP + c.item],
+      ['氏名(苗字+名前)', 'テスト'], ['購入日付', new Date()], ['勘定科目', first('勘定科目')], ['消費税率', first('消費税率')],
+      ['購入先', 'テスト'], ['購入物品名', 'テスト'], ['購入目的', 'テスト'],
+      ['経費精算金額(数字のみ入力)(一部金額の精算はできません！！)', c.amount], ['レシート写真の必要性', noReceipt]];
+    if (c.name === 'newAccount') qa.push(['銀行名', 'テスト銀行'], ['支店名', 'テスト支店'], ['口座番号(半角)', '0000000'], ['口座名義(カタカナ)', 'テスト']);
+    const r = form.createResponse();
+    qa.forEach(([t, val]) => r.withItemResponse(resp(t, val)));
+    return { kind: '委員会予算', budget: c.budget, item: c.item, amount: c.amount, name: c.name, before: appliedAmount(ss, '委員会予算', c.budget, c.item), url: r.toPrefilledUrl() };
+  });
+  props().setProperty('TESTS2', JSON.stringify(tests));
+  props().setProperty('ALIGN_BASE', JSON.stringify(alignState(ss)));
+  log(JSON.stringify({ changes, inManifest, tests }, null, 1));
+}
+
+// 承認(CJ)・払い戻し(CK)が同じ回答の行に付いたままか: プロセスチェックシートの行ごとの [タイムスタンプ, CJ, CK]
+function alignState(ss) {
+  const pc = ss.getSheetByName(PC_TAB);
+  const n = pc.getLastRow() - 3;
+  const a = pc.getRange(4, 1, n, 1).getValues(), c = pc.getRange(4, CHECK_COLS[0], n, 2).getValues();
+  return a.map((r, i) => [r[0] instanceof Date ? r[0].getTime() : String(r[0]), String(c[i][0]), String(c[i][1])]).filter(r => r[0] !== '');
+}
+
+// 手順6: step5 の送信結果・口座の分岐・行ずれ・テストフォームへの添付を確かめる(個人情報は出さない: 件数と真偽のみ)
+function step6_verify() {
+  const p = props().getProperties();
+  const ss = SpreadsheetApp.openById(p.COPY_SHEET_ID);
+  SpreadsheetApp.flush();
+  const tests = JSON.parse(p.TESTS2).map(t => {
+    const after = appliedAmount(ss, t.kind, t.budget, t.item);
+    return { name: t.name, before: t.before, after, ok: after - t.before === t.amount };
+  });
+  // 口座未登録の回答には口座 4 項目(D:G)が入り、登録済みの回答には入らない
+  const resp = ss.getSheetByName(RESP_TAB);
+  const head = resp.getRange(1, 1, 1, resp.getLastColumn()).getValues()[0].map(x => String(x).trim());
+  const amtCol = head.findIndex(h => h.startsWith('経費精算金額')) + 1;
+  const last = resp.getRange(Math.max(2, resp.getLastRow() - 9), 1, Math.min(10, resp.getLastRow() - 1), resp.getLastColumn()).getValues();
+  const acct = amount => { const r = last.find(x => Number(x[amtCol - 1]) === amount); return r ? r.slice(3, 7).every(x => x !== '') : 'row not found'; };
+  // 行ずれ: step5 時点の行と今の行を比べる(新しい回答は末尾に足されるだけのはず)
+  const base = JSON.parse(p.ALIGN_BASE), now = alignState(ss);
+  const moved = base.filter((r, i) => JSON.stringify(r) !== JSON.stringify(now[i])).length;
+  // 本番とも比べる(コピー作成時点までの行。本番で後から承認された分は差として出る)
+  const prod = alignState(SpreadsheetApp.openById(PROD_SHEET_ID));
+  const tsMismatch = base.filter((r, i) => !prod[i] || r[0] !== prod[i][0]).length;
+  const checkDiff = base.filter((r, i) => prod[i] && r[0] === prod[i][0] && (r[1] !== prod[i][1] || r[2] !== prod[i][2])).length;
+  const newRows = now.slice(base.length).map(r => [r[1], r[2]]);
+  // テストフォームへの添付付き送信
+  const tf = FormApp.openById(p.TEST_FORM_ID);
+  const up = tf.getItems(FormApp.ItemType.FILE_UPLOAD)[0];
+  const tr = tf.getResponses();
+  const lastUp = tr.length ? tr[tr.length - 1].getResponseForItem(up) : null;
+  log(JSON.stringify({
+    tests, accountFilled: { newAccount: acct(90006), registered: acct(90005) },
+    align: { rows: base.length, nowRows: now.length, movedSinceStep5: moved, timestampMismatchVsProd: tsMismatch, checkDiffVsProd: checkDiff, newRowsChecks: newRows },
+    upload: { testFormResponses: tr.length, lastHasFile: !!(lastUp && lastUp.getResponse() && lastUp.getResponse().length) },
+  }, null, 1));
 }
