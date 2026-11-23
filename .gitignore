@@ -1,3 +1,5 @@
 node_modules/
 forms-get*.json
 !test/fixtures/forms-get.json
+gas/config.js
+gas/.clasp.json
