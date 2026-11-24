@@ -3,7 +3,6 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dump-form": "node scripts/dump-form.ts",
     "test": "node --test"
   },
   "engines": {
