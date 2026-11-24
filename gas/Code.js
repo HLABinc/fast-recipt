@@ -324,13 +324,19 @@ function migrate(form, ss) {
   return { deleted: deleted.length, ...sheet, changedValues: changes.length, changes: changes.slice(0, 50), alignMoved };
 }
 
-// 本番移行(docs/migration.md)。スクリプトプロパティ ALLOW_PROD=yes のときだけ動き、終わったら消す
+// 本番移行(docs/migration.md)。スクリプトプロパティ ALLOW_PROD=yes のときだけ動き、終わったら消す。
+// REHEARSAL_SHEET_ID / REHEARSAL_FORM_ID があればリハーサル用コピーが対象(prepareRehearsal が設定、endRehearsal が消す)
 function migrateProduction() {
-  const form = FormApp.openById(PROD_FORM_ID);
+  const p = props().getProperties();
+  if (p.ALLOW_PROD !== 'yes') throw new Error('スクリプト プロパティ ALLOW_PROD=yes を設定してから実行する');
+  const rehearsal = !!p.REHEARSAL_SHEET_ID;
+  const formId = rehearsal ? p.REHEARSAL_FORM_ID : PROD_FORM_ID, sheetId = rehearsal ? p.REHEARSAL_SHEET_ID : PROD_SHEET_ID;
+  log(rehearsal ? '対象: リハーサル用コピー' : '対象: 本番');
+  const form = FormApp.openById(formId);
   form.setAcceptingResponses(false); // 途中の構成で回答が来ないように
   try {
-    const res = migrate(form, SpreadsheetApp.openById(PROD_SHEET_ID));
-    props().setProperties({ FORM_ID: PROD_FORM_ID, SHEET_ID: PROD_SHEET_ID });
+    const res = migrate(form, SpreadsheetApp.openById(sheetId));
+    props().setProperties({ FORM_ID: formId, SHEET_ID: sheetId });
     installSyncTrigger();
     CacheService.getScriptCache().remove('manifest');
     log(JSON.stringify(res, null, 1));
@@ -338,6 +344,46 @@ function migrateProduction() {
     props().deleteProperty('ALLOW_PROD');
     form.setAcceptingResponses(true);
   }
+}
+
+// リハーサル: 本番シートのコピー(付いているフォームも複製される)を移行前の状態で用意し、migrateProduction の対象にする
+function prepareRehearsal() {
+  const copy = SpreadsheetApp.openById(DriveApp.getFileById(PROD_SHEET_ID).makeCopy(`${DEL} [リハーサル] 予実管理シート`, DriveApp.getRootFolder()).getId());
+  const resp = copy.getSheetByName(RESP_TAB);
+  const url = resp.getFormUrl();
+  if (!url || url.includes(PROD_FORM_ID)) throw new Error('コピーにフォームの複製が付いていない: ' + url);
+  const form = FormApp.openByUrl(url);
+  resp.getRange(2, 4, resp.getLastRow() - 1, 4).clearContent(); // 口座情報(D:G)は消す
+  const forms = copy.getSheets().map(s => s.getFormUrl()).filter(Boolean).map(u => FormApp.openByUrl(u).getId());
+  form.setPublished(true);
+  stripUpload(form); // 共有ドライブにできるフォームのコピーは、アップロード質問があると受付停止になる
+  unfiltered(copy.getSheetByName(PC_TAB), () => localizeImports(copy));
+  props().setProperties({ REHEARSAL_SHEET_ID: copy.getId(), REHEARSAL_FORM_ID: form.getId() });
+  const marked = [...forms, ...(typeof LEFTOVER_IDS === 'undefined' ? [] : LEFTOVER_IDS)].map(markForDeletion);
+  log(JSON.stringify({ sheet: copy.getUrl(), form: form.getEditUrl(), view: form.getPublishedUrl(), marked }, null, 1));
+}
+
+// リハーサルの片付け: トリガーを外し、コピーをゴミ箱へ(共有ドライブのフォームは消せないので [削除依頼] のまま残る)
+function endRehearsal() {
+  const p = props().getProperties();
+  ScriptApp.getProjectTriggers().filter(t => t.getHandlerFunction() === 'onBudgetChange').forEach(t => ScriptApp.deleteTrigger(t));
+  const out = [];
+  for (const id of [p.REHEARSAL_SHEET_ID, p.REHEARSAL_FORM_ID].filter(Boolean)) {
+    if (id === PROD_FORM_ID || id === PROD_SHEET_ID) throw new Error('本番');
+    try { const f = DriveApp.getFileById(id); f.setTrashed(true); out.push(`${f.getName()}: ゴミ箱へ`); } catch (e) { out.push(`${id}: ${e.message}(削除依頼で消す)`); }
+  }
+  props().deleteProperty('REHEARSAL_SHEET_ID'); props().deleteProperty('REHEARSAL_FORM_ID');
+  log(out.join('\n'));
+}
+
+// 消す権限が無いファイルは名前の頭に [削除依頼] を付け、場所を返す
+const DEL = '[削除依頼]';
+function markForDeletion(id) {
+  if (id === PROD_FORM_ID || id === PROD_SHEET_ID) throw new Error('本番');
+  const f = DriveApp.getFileById(id);
+  try { if (!f.getName().startsWith(DEL)) f.setName(`${DEL} ${f.getName()}`); } catch (e) { return `${id}: ${e.message}`; }
+  const ps = f.getParents(), parent = ps.hasNext() ? ps.next() : null;
+  return `${f.getName()} | ${f.getUrl()} | ${parent ? `${parent.getName()} ${parent.getUrl()}` : '-'}`;
 }
 
 function guardProd(id) {
