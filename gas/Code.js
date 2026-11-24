@@ -44,6 +44,13 @@ function rewriteSumifs(f, nameCols, nameCol, itemCol) {
   });
 }
 
+// onChange のうち sync が要るもの: 予算タブのセル編集と、行の挿入・削除・タブの非表示など。書式変更と他のタブの編集(承認など)は飛ばす
+function shouldSync(changeType, sheetName) {
+  if (changeType === 'FORMAT') return false;
+  if (changeType !== 'EDIT') return true;
+  return Object.values(KINDS).some(k => k.tab.test(sheetName));
+}
+
 // ---------- フォーム ----------
 
 function findItem(form, title) {
@@ -273,7 +280,21 @@ function props() { return PropertiesService.getScriptProperties(); }
 // 定期同期(manifest が向くフォームと、その予算タブ)
 function sync() {
   const p = props().getProperties();
-  syncChoices(FormApp.openById(p.FORM_ID), SpreadsheetApp.openById(p.SHEET_ID));
+  log(JSON.stringify(syncChoices(FormApp.openById(p.FORM_ID), SpreadsheetApp.openById(p.SHEET_ID))));
+}
+
+// 予算タブを編集したら自動で sync する(migrateProduction が installSyncTrigger で設定)
+function onBudgetChange(e) {
+  if (!shouldSync(e.changeType, e.source.getActiveSheet().getName())) return;
+  const lock = LockService.getScriptLock();
+  lock.waitLock(30000); // 続けて編集されても 1 本ずつ。後の実行が最新の予算タブを読む
+  try { sync(); } finally { lock.releaseLock(); }
+}
+
+function installSyncTrigger() {
+  const ss = SpreadsheetApp.openById(props().getProperty('SHEET_ID'));
+  ScriptApp.getProjectTriggers().filter(t => t.getHandlerFunction() === 'onBudgetChange').forEach(t => ScriptApp.deleteTrigger(t));
+  ScriptApp.newTrigger('onBudgetChange').forSpreadsheet(ss).onChange().create();
 }
 
 // 手順1: 本番フォームのコピーを新構成にし、選択肢を本番の予算タブから入れる(本番は読むだけ)。回答先は無し。
@@ -310,6 +331,7 @@ function migrateProduction() {
   try {
     const res = migrate(form, SpreadsheetApp.openById(PROD_SHEET_ID));
     props().setProperties({ FORM_ID: PROD_FORM_ID, SHEET_ID: PROD_SHEET_ID });
+    installSyncTrigger();
     CacheService.getScriptCache().remove('manifest');
     log(JSON.stringify(res, null, 1));
   } finally {

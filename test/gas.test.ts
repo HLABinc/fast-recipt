@@ -5,8 +5,8 @@ import vm from "node:vm";
 
 // GAS のファイルはモジュールではないので、グローバルとして読み込む
 const ctx: any = {};
-vm.runInNewContext(readFileSync(new URL("../gas/Code.js", import.meta.url), "utf8") + "\nthis.f = { budgetRows, rewriteSumifs };", ctx);
-const { budgetRows, rewriteSumifs } = ctx.f;
+vm.runInNewContext(readFileSync(new URL("../gas/Code.js", import.meta.url), "utf8") + "\nthis.f = { budgetRows, rewriteSumifs, shouldSync };", ctx);
+const { budgetRows, rewriteSumifs, shouldSync } = ctx.f;
 
 test("budgetRows: 集計式のある行だけ、A 列が空ならブロック見出しを予算名に", () => {
   const values = [
@@ -36,4 +36,13 @@ test("rewriteSumifs: 名前列と項目列だけを集計用の列に差し替�
     `=SUMIFS(${P}C103:C103,${P}C112:C112,R[-2]C2,${P}C89:C89,TRUE)`);
   // 金額列や名前列が違う式(既に壊れている)は触らない
   assert.equal(rewriteSumifs(`=SUMIFS(${P}C81:C81,${P}C11:C11,R[0]C1)`, [22], 112, 113), null);
+});
+
+test("shouldSync: 予算タブの編集と行・タブの変更だけ", () => {
+  assert.equal(shouldSync("EDIT", "26年度後期委員会別予算"), true);
+  assert.equal(shouldSync("EDIT", "26年度ハウス予算"), true);
+  assert.equal(shouldSync("EDIT", "プロセスチェックシート"), false); // 承認・払い戻しの入力
+  assert.equal(shouldSync("FORMAT", "26年度後期クラブ別予算"), false);
+  assert.equal(shouldSync("REMOVE_ROW", "どこでも"), true);
+  assert.equal(shouldSync("OTHER", "どこでも"), true); // タブの非表示
 });
