@@ -163,6 +163,7 @@ function migrateSheet(ss) {
   if (pc.getMaxColumns() < itemCol) pc.insertColumnsAfter(pc.getMaxColumns(), itemCol - pc.getMaxColumns());
   if (pc.getMaxRows() < 4601) pc.insertRowsAfter(pc.getMaxRows(), 4601 - pc.getMaxRows());
   if (pc.getRange(3, nameCol).getValue() !== '') throw new Error('集計用の列が空いていない');
+  if (pc.getRange(3, 1, 1, pc.getLastColumn()).getValues()[0].includes('予算名(集計用)')) throw new Error('移行済み(集計用の列がある)');
   const nameCols = unfiltered(pc, () => writeAggFormulas(ss, nameCol));
   const skipped = [];
   let changed = 0;
@@ -340,6 +341,8 @@ function step1_createTestForm() {
 
 // 移行の本体(step2 のコピーと本番で共通)。既存の集計値と承認・払い戻しの行が変わらないことも返す
 function migrate(form, ss) {
+  const pc = ss.getSheetByName(PC_TAB);
+  if (pc.getRange(3, 1, 1, pc.getLastColumn()).getValues()[0].includes('予算名(集計用)')) throw new Error('移行済み(集計用の列がある)');
   const before = snapshot(ss), align = alignState(ss);
   const deleted = migrateForm(form);
   const sheet = migrateSheet(ss);
