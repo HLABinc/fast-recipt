@@ -307,7 +307,9 @@ function props() { return PropertiesService.getScriptProperties(); }
 // 定期同期(manifest が向くフォームと、その予算タブ)
 function sync() {
   const p = props().getProperties();
-  log(JSON.stringify(syncChoices(FormApp.openById(p.FORM_ID), SpreadsheetApp.openById(p.SHEET_ID))));
+  const changes = syncChoices(FormApp.openById(p.FORM_ID), SpreadsheetApp.openById(p.SHEET_ID));
+  props().setProperty('LAST_SYNC', `${new Date().toISOString()} 変更${changes.length}件`); // 自動同期が動いているかの確認用
+  log(JSON.stringify(changes));
 }
 
 // 予算タブを編集したら自動で sync する(migrateProduction が installSyncTrigger で設定)
@@ -426,7 +428,7 @@ function allowProd() {
 
 // 検証で残ったプロパティ(長いログなど。設定画面の保存を妨げる)を消し、残りの名前と長さを出す
 function cleanupProps() {
-  ['LAST_LOG', 'DEV_LOG', 'DEV_PREV', 'TESTS', 'TESTS2', 'ALIGN_BASE', 'COPY_SHEET_ID', 'COPY_FORM_ID', 'COPY_OTHER_FORMS', 'TEST_FORM_ID']
+  ['LAST_LOG', 'DEV_LOG', 'DEV_PREV', 'TESTS', 'TESTS2', 'ALIGN_BASE', 'COPY_SHEET_ID', 'COPY_FORM_ID', 'COPY_OTHER_FORMS', 'TEST_FORM_ID', 'REHEARSAL_SHEET_ID', 'REHEARSAL_FORM_ID']
     .forEach(k => props().deleteProperty(k));
   const p = props().getProperties();
   log(Object.keys(p).map(k => `${k}: ${k === 'TOKEN' ? '(非表示)' : String(p[k]).length + '文字'}`).join('\n'));
