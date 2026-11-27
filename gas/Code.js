@@ -415,6 +415,20 @@ function markForDeletion(id) {
   return `${f.getName()} | ${f.getUrl()} | ${parent ? `${parent.getName()} ${parent.getUrl()}` : '-'}`;
 }
 
+// プロジェクトの設定画面でプロパティを保存できないとき用: ALLOW_PROD=yes をスクリプトから設定する
+function allowProd() {
+  props().setProperty('ALLOW_PROD', 'yes');
+  log('ALLOW_PROD=yes');
+}
+
+// 検証で残ったプロパティ(長いログなど。設定画面の保存を妨げる)を消し、残りの名前と長さを出す
+function cleanupProps() {
+  ['LAST_LOG', 'DEV_LOG', 'DEV_PREV', 'TESTS', 'TESTS2', 'ALIGN_BASE', 'COPY_SHEET_ID', 'COPY_FORM_ID', 'COPY_OTHER_FORMS', 'TEST_FORM_ID']
+    .forEach(k => props().deleteProperty(k));
+  const p = props().getProperties();
+  log(Object.keys(p).map(k => `${k}: ${k === 'TOKEN' ? '(非表示)' : String(p[k]).length + '文字'}`).join('\n'));
+}
+
 function guardProd(id) {
   if ((id === PROD_FORM_ID || id === PROD_SHEET_ID) && props().getProperty('ALLOW_PROD') !== 'yes') throw new Error('本番は ALLOW_PROD=yes のときだけ移行する');
 }
