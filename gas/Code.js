@@ -44,6 +44,15 @@ function rewriteSumifs(f, nameCols, nameCol, itemCol) {
   });
 }
 
+// 同じ列の R1C1 式から手本を選ぶ(精算金額 CY と集計用予算名列を参照する式のうち最多。2 件未満や同数なら null)
+function columnFormula(formulas, nameCol) {
+  const n = {};
+  formulas.filter(f => f.includes(`C${AMOUNT_COL}:C${AMOUNT_COL}`) && f.includes(`C${nameCol}:C${nameCol}`)).forEach(f => { n[f] = (n[f] || 0) + 1; });
+  const top = Object.entries(n).sort((x, y) => y[1] - x[1]);
+  if (!top.length || top[0][1] < 2 || (top[1] && top[1][1] === top[0][1])) return null;
+  return top[0][0];
+}
+
 // onChange のうち sync が要るもの: 予算タブのセル編集と、行の挿入・削除・タブの非表示など。書式変更と他のタブの編集(承認など)は飛ばす
 function shouldSync(changeType, sheetName) {
   if (changeType === 'FORMAT') return false;
@@ -192,6 +201,23 @@ function writeAggFormulas(ss, nameCol) {
   return [house, iin, club, mypro];
 }
 
+// 金額列(CY)以外を合計している既存の式(コピーミス)を、同じ列のほかの行と同じ式に直す。migrateSheet の後に呼ぶ
+function repairBroken(ss, nameCol) {
+  guardProd(ss.getId());
+  const out = [];
+  for (const sh of budgetTabs(ss)) {
+    const fs = sh.getDataRange().getFormulasR1C1();
+    fs.forEach((row, i) => row.forEach((f, j) => {
+      if (!f.includes(PC_TAB) || f.includes(`C${nameCol}:C${nameCol}`)) return; // 書き換え済みの式は正しい
+      const g = columnFormula(fs.map(r => r[j]), nameCol);
+      const a1 = `${sh.getName()}!${sh.getRange(i + 1, j + 1).getA1Notation()}`;
+      if (g) { sh.getRange(i + 1, j + 1).setFormulaR1C1(g); out.push(`${a1}: ${f} → ${g}`); }
+      else out.push(`${a1}: 直せない(同じ列に手本の式が無い) ${f}`);
+    }));
+  }
+  return out;
+}
+
 function budgetTabs(ss) {
   return ss.getSheets().filter(sh => !sh.isSheetHidden() && Object.values(KINDS).some(k => k.tab.test(sh.getName())));
 }
@@ -318,10 +344,13 @@ function migrate(form, ss) {
   const deleted = migrateForm(form);
   const sheet = migrateSheet(ss);
   syncChoices(form, ss);
-  const changes = diff(before, snapshot(ss));
+  const migrated = snapshot(ss);
+  const changes = diff(before, migrated); // 移行そのものでは値が変わらないこと
+  const repaired = repairBroken(ss, sheet.nameCol);
+  const repairChanges = diff(migrated, snapshot(ss)); // コピーミスの修正で変わる値(そのセルと合計・消化率)
   const now = alignState(ss);
   const alignMoved = align.filter((r, i) => JSON.stringify(r) !== JSON.stringify(now[i])).length;
-  return { deleted: deleted.length, ...sheet, changedValues: changes.length, changes: changes.slice(0, 50), alignMoved };
+  return { deleted: deleted.length, ...sheet, changedValues: changes.length, changes: changes.slice(0, 50), alignMoved, repaired, repairChanges: repairChanges.slice(0, 40) };
 }
 
 // 本番移行(docs/migration.md)。スクリプトプロパティ ALLOW_PROD=yes のときだけ動き、終わったら消す。

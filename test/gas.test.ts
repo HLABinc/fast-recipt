@@ -5,8 +5,8 @@ import vm from "node:vm";
 
 // GAS のファイルはモジュールではないので、グローバルとして読み込む
 const ctx: any = {};
-vm.runInNewContext(readFileSync(new URL("../gas/Code.js", import.meta.url), "utf8") + "\nthis.f = { budgetRows, rewriteSumifs, shouldSync };", ctx);
-const { budgetRows, rewriteSumifs, shouldSync } = ctx.f;
+vm.runInNewContext(readFileSync(new URL("../gas/Code.js", import.meta.url), "utf8") + "\nthis.f = { budgetRows, rewriteSumifs, shouldSync, columnFormula };", ctx);
+const { budgetRows, rewriteSumifs, shouldSync, columnFormula } = ctx.f;
 
 test("budgetRows: 集計式のある行だけ、A 列が空ならブロック見出しを予算名に", () => {
   const values = [
@@ -45,4 +45,14 @@ test("shouldSync: 予算タブの編集と行・タブの変更だけ", () => {
   assert.equal(shouldSync("FORMAT", "26年度後期クラブ別予算"), false);
   assert.equal(shouldSync("REMOVE_ROW", "どこでも"), true);
   assert.equal(shouldSync("OTHER", "どこでも"), true); // タブの非表示
+});
+
+test("columnFormula: 同じ列で最も多い正しい式を手本にする", () => {
+  const P = "'プロセスチェックシート'!";
+  const ok = `=SUMIFS(${P}C103:C103,${P}C112:C112,R[0]C1,${P}C113:C113,R[0]C2,${P}C89:C89,TRUE)`;
+  const bad = `=SUMIFS(${P}C81:C81,${P}C11:C11,R[0]C1,${P}C15:C15,R[0]C2,${P}C89:C89,TRUE)`;
+  assert.equal(columnFormula(["", ok, "=SUM(F3)", ok, bad], 112), ok);
+  assert.equal(columnFormula([ok, bad], 112), null); // 手本が 1 件だけ
+  const other = ok.replace("R[0]C1", "R[-2]C2");
+  assert.equal(columnFormula([ok, ok, other, other], 112), null); // 同数で決められない
 });
