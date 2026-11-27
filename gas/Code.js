@@ -309,6 +309,7 @@ function sync() {
   const p = props().getProperties();
   const changes = syncChoices(FormApp.openById(p.FORM_ID), SpreadsheetApp.openById(p.SHEET_ID));
   props().setProperty('LAST_SYNC', `${new Date().toISOString()} 変更${changes.length}件`); // 自動同期が動いているかの確認用
+  refreshCanvas();
   log(JSON.stringify(changes));
 }
 
@@ -322,8 +323,27 @@ function onBudgetChange(e) {
 
 function installSyncTrigger() {
   const ss = SpreadsheetApp.openById(props().getProperty('SHEET_ID'));
-  ScriptApp.getProjectTriggers().filter(t => t.getHandlerFunction() === 'onBudgetChange').forEach(t => ScriptApp.deleteTrigger(t));
+  ScriptApp.getProjectTriggers().filter(t => ['onBudgetChange', 'refreshCanvas'].includes(t.getHandlerFunction())).forEach(t => ScriptApp.deleteTrigger(t));
   ScriptApp.newTrigger('onBudgetChange').forSpreadsheet(ss).onChange().create();
+  ScriptApp.newTrigger('refreshCanvas').timeBased().everyHours(1).create(); // フォームの質問を直接編集したとき用
+  refreshCanvas();
+}
+
+// フォームの構成(manifest)を Slack キャンバスに書き出す。AI はこれを読む。内容が変わったときだけ書く
+function refreshCanvas() {
+  if (typeof SLACK_TOKEN === 'undefined' || typeof CANVAS_ID === 'undefined') return;
+  const md = '> このキャンバスはフォームから自動で更新されます。手で編集しないでください。\n\n' + toMarkdown(FormApp.openById(props().getProperty('FORM_ID')));
+  const hash = Utilities.base64Encode(Utilities.computeDigest(Utilities.DigestAlgorithm.SHA_256, md, Utilities.Charset.UTF_8));
+  if (props().getProperty('CANVAS_HASH') === hash) return;
+  const r = UrlFetchApp.fetch('https://slack.com/api/canvases.edit', {
+    method: 'post', contentType: 'application/json; charset=utf-8', muteHttpExceptions: true,
+    headers: { Authorization: 'Bearer ' + SLACK_TOKEN },
+    payload: JSON.stringify({ canvas_id: CANVAS_ID, changes: [{ operation: 'replace', document_content: { type: 'markdown', markdown: md } }] }),
+  });
+  const j = JSON.parse(r.getContentText());
+  if (!j.ok) throw new Error('Slack キャンバスの更新に失敗: ' + j.error);
+  props().setProperty('CANVAS_HASH', hash);
+  log('canvas updated');
 }
 
 // 手順1: 本番フォームのコピーを新構成にし、選択肢を本番の予算タブから入れる(本番は読むだけ)。回答先は無し。
